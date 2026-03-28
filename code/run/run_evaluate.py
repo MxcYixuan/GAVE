@@ -1,22 +1,15 @@
 import numpy as np
 import math
-import logging
 from bidding_train_env.strategy import PlayerBiddingStrategy
 from bidding_train_env.dataloader.test_dataloader import TestDataLoader
 from bidding_train_env.environment.offline_env import OfflineEnv
+from bidding_train_env.common.logger import setup_logger
 import pandas as pd
 import datatable as dt
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(name)s] [%(filename)s(%(lineno)d)] [%(levelname)s] %(message)s"
-)
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
-def getConversion(reward, cpa, cpa_constraint):
-    return reward
-
+__all__ = ["run_test", "getScore_nips", "getScore1_nips"]
 
 
 def getScore_nips(reward, cpa, cpa_constraint):
@@ -35,6 +28,11 @@ def getScore1_nips(reward, cpa, cpa_constraint):
         coef = cpa_constraint / (cpa + 1e-10)
         penalty = pow(coef, beta)
     return penalty * reward
+
+
+def getConversion(reward, cpa, cpa_constraint):
+    """Return total conversions (rewards)."""
+    return reward
 
 
 def run_test(file_path='./data/traffic/period-7.csv', model_name="dt.pt", model_param={}):

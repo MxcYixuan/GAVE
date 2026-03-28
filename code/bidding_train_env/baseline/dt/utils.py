@@ -5,19 +5,9 @@ import ast
 import numpy as np
 import pickle
 import random
+from bidding_train_env.baseline.dt.dt import getScore
 
-
-def getScore(budget, cpa_cons, states, all_reward):
-    beta = 2
-    curr_cost = budget * (1 - states[:, 1]).reshape(-1,1)
-    curr_all_reward = all_reward.reshape(-1,1)
-    curr_cpa = curr_cost / (curr_all_reward + 1e-10)
-    curr_coef = cpa_cons / (curr_cpa + 1e-10)
-    curr_penalty = pow(curr_coef, beta)
-    curr_penalty = np.where(curr_penalty > 1.0, 1.0, curr_coef)
-    curr_score = curr_penalty * curr_all_reward
-
-    return curr_score
+__all__ = ["EpisodeReplayBuffer"]
 
 class EpisodeReplayBuffer(Dataset):
     def __init__(self, state_dim, act_dim, data_path, scale=2000, K=20):
@@ -88,9 +78,12 @@ class EpisodeReplayBuffer(Dataset):
             all_reward[0] = 0
             for ind in range(1, len(all_reward)):
                 all_reward[ind] = all_reward[ind - 1] + self.rewards[i][ind - 1]
-            s_rtg = np.concatenate((self.states[i], self.next_states[i][-1].reshape((1,-1))),axis=0)
-            curr_score = getScore(self.budget[i][0], self.cpacons[i][0], s_rtg, all_reward)
-            curr_score = curr_score[-1]-curr_score
+
+            # Compute score for each timestep using the state at that timestep
+            # states[i] has shape (traj_len, 16), all_reward has shape (traj_len + 1,)
+            curr_score = getScore(self.budget[i][0], self.cpacons[i][0], self.states[i], all_reward[1:])
+            # Compute difference from final score (score-to-go)
+            curr_score = curr_score[-1] - curr_score
             self.trajectories.append(
                 {"observations": self.states[i], "actions": self.actions[i], "rewards": self.rewards[i],
                  "dones": self.dones[i], "next_states": self.next_states[i], "budget": self.budget[i],
@@ -115,14 +108,17 @@ class EpisodeReplayBuffer(Dataset):
 
     def __getitem__(self, index):
         traj = self.trajectories[int(self.sorted_inds[index])]
-        start_t = random.randint(0, max(traj['rewards'].shape[0] -self.K, 0))
+        start_t = random.randint(0, max(traj['rewards'].shape[0] - self.K, 0))
 
         s = traj['observations'][start_t: start_t + self.K]
         a = traj['actions'][start_t: start_t + self.K]
         r = traj['rewards'][start_t: start_t + self.K].reshape(-1, 1)
         sn = traj['next_states'][start_t: start_t + self.K]
-        all_reward = traj['all_reward'][start_t: start_t + self.K+1].reshape(-1, 1)
-        curr_score = traj['curr_score'][start_t: start_t + self.K+1].reshape(-1, 1)
+
+        # Slice with K+1 elements (need extra for returns-to-go calculation)
+        all_reward = traj['all_reward'][start_t: start_t + self.K + 1]
+        curr_score = traj['curr_score'][start_t: start_t + self.K + 1]
+
         if 'terminals' in traj:
             d = traj['terminals'][start_t: start_t + self.K]
         else:
@@ -131,15 +127,36 @@ class EpisodeReplayBuffer(Dataset):
 
         tlen = s.shape[0]
 
+        # Pad to fixed length K
         s = np.concatenate([np.zeros((self.K - tlen, self.state_dim)), s], axis=0)
         a = np.concatenate([np.ones((self.K - tlen, self.act_dim)) * -10., a], axis=0)
         r = np.concatenate([np.zeros((self.K - tlen, 1)), r], axis=0)
         sn = np.concatenate([np.zeros((self.K - tlen, self.state_dim)), sn], axis=0)
         d = np.concatenate([np.ones((self.K - tlen)) * 2, d], axis=0)
-        all_reward = np.concatenate([np.zeros((self.K - tlen, 1)), all_reward], axis=0)
-        curr_score = np.concatenate([np.zeros((self.K - tlen, 1)), curr_score], axis=0)
         timesteps = np.concatenate([np.zeros((self.K - tlen)), timesteps], axis=0)
         mask = np.concatenate([np.zeros((self.K - tlen)), np.ones((tlen))], axis=0)
+
+        # Pad all_reward and curr_score to K+1
+        all_reward_len = all_reward.shape[0] if all_reward.ndim > 0 else len(all_reward)
+        curr_score_len = curr_score.shape[0] if curr_score.ndim > 0 else len(curr_score)
+
+        if all_reward_len < self.K + 1:
+            all_reward_pad = self.K + 1 - all_reward_len
+            if all_reward.ndim == 1:
+                all_reward = np.concatenate([np.zeros(all_reward_pad), all_reward], axis=0)
+            else:
+                all_reward = np.concatenate([np.zeros((all_reward_pad, 1)), all_reward], axis=0)
+
+        if curr_score_len < self.K + 1:
+            curr_score_pad = self.K + 1 - curr_score_len
+            if curr_score.ndim == 1:
+                curr_score = np.concatenate([np.zeros(curr_score_pad), curr_score], axis=0)
+            else:
+                curr_score = np.concatenate([np.zeros((curr_score_pad, 1)), curr_score], axis=0)
+
+        all_reward = all_reward.reshape(-1, 1)
+        curr_score = curr_score.reshape(-1, 1)
+
         s = (s - self.state_mean) / self.state_std
         r = r / self.scale
         sn = (sn - self.state_mean) / self.state_std

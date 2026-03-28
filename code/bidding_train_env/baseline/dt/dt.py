@@ -3,17 +3,60 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 import math
-from gin import current_scope_str
+
+
+__all__ = ["GAVE", "getScore", "getScore_batch"]
 
 
 def getScore(budget, cpa_cons, states, all_reward):
+    """Calculate score with penalty for CPA constraint violation (numpy version).
+
+    Args:
+        budget: Total budget
+        cpa_cons: CPA constraint
+        states: State array, can be 1D (single state) or 2D (multiple states, shape [T, state_dim])
+        all_reward: Cumulative rewards, 1D array of shape [T]
+
+    Returns:
+        Score array of shape [T]
+    """
+    import numpy as np
     beta = 2
-    curr_cost = budget * (1 - states[1])
-    curr_all_reward = all_reward
+    states = np.asarray(states)
+    all_reward = np.asarray(all_reward)
+
+    # Handle both 1D and 2D state arrays
+    if states.ndim == 1:
+        # Single state case
+        curr_cost = budget * (1 - states[1])
+        curr_all_reward = all_reward
+        curr_cpa = curr_cost / (curr_all_reward + 1e-10)
+        curr_coef = cpa_cons / (curr_cpa + 1e-10)
+        curr_penalty = pow(curr_coef, beta)
+        curr_penalty = 1.0 if curr_penalty > 1.0 else curr_coef
+        curr_score = curr_penalty * curr_all_reward
+    else:
+        # Multiple states case (batch)
+        curr_cost = budget * (1 - states[:, 1])
+        curr_all_reward = all_reward
+        curr_cpa = curr_cost / (curr_all_reward + 1e-10)
+        curr_coef = cpa_cons / (curr_cpa + 1e-10)
+        curr_penalty = np.where(curr_coef > 1.0, 1.0, curr_coef)
+        curr_penalty = np.power(curr_penalty, beta)
+        curr_score = curr_penalty * curr_all_reward
+
+    return curr_score
+
+
+def getScore_batch(budget, cpa_cons, states, all_reward):
+    """Batch version of getScore for vectorized computation."""
+    beta = 2
+    curr_cost = budget * (1 - states[:, 1]).reshape(-1, 1)
+    curr_all_reward = all_reward.reshape(-1, 1)
     curr_cpa = curr_cost / (curr_all_reward + 1e-10)
     curr_coef = cpa_cons / (curr_cpa + 1e-10)
     curr_penalty = pow(curr_coef, beta)
-    curr_penalty = 1.0 if curr_penalty > 1.0 else curr_coef
+    curr_penalty = torch.where(curr_penalty > 1.0, 1.0, curr_coef)
     curr_score = curr_penalty * curr_all_reward
 
     return curr_score
@@ -316,7 +359,8 @@ class GAVE(nn.Module):
             self.eval_rewards[-1] = pre_reward
             pred_all_reward = self.eval_all_reward[0, -1] + pre_reward
             self.eval_all_reward = torch.cat([self.eval_all_reward, pred_all_reward.reshape(1, 1)], dim=1)
-            curr_score = target_return - getScore(budget, cpa, self.eval_states[-1], pred_all_reward) / self.scale
+            curr_score_np = getScore(budget, cpa, self.eval_states[-1].cpu().numpy(), pred_all_reward.item())
+            curr_score = target_return - torch.tensor(curr_score_np, dtype=torch.float32).to(self.device) / self.scale
             self.eval_curr_score = torch.cat([self.eval_curr_score, curr_score.reshape(1, 1)], dim=1)
             self.eval_timesteps = torch.cat(
                 [self.eval_timesteps,

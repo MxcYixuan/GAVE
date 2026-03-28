@@ -1,3 +1,4 @@
+"""Test data loader for GAVE evaluation."""
 import os
 import numpy as np
 import pandas as pd
@@ -5,6 +6,8 @@ import pickle
 import warnings
 
 warnings.filterwarnings('ignore')
+
+__all__ = ["TestDataLoader"]
 
 
 class TestDataLoader:

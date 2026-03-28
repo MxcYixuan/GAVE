@@ -82,7 +82,7 @@ if __name__ == "__main__":
     model_param["device"]="cpu"
     csv_file = model_param["test_csv"]
     pt_files = glob.glob(os.path.join(model_param['save_dir'], '*.pt'))
-    pt_names = sorted([int(i.split("\\")[-1].split("/")[-1][:-3]) for i in pt_files])
+    pt_names = sorted([int(os.path.splitext(os.path.basename(f))[0]) for f in pt_files])
     eval_result = []
     for pt_name in pt_names:
         score, score1, conversion, exc = run_test(file_path=csv_file, model_name=str(pt_name)+".pt", model_param=model_param)
